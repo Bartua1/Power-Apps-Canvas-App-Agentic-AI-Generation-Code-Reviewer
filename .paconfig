@@ -1,0 +1,15 @@
+{
+  "project_name": "PowerAppsAgenticReviewer",
+  "version": "1.0.0",
+  "powerapps_schema_version": "1.326",
+  "validation_settings": {
+    "strict_formula_prefix": true,
+    "disallow_spaces_in_names": true,
+    "enforce_pascal_case": true
+  },
+  "paths": {
+    "docs": "./aidocs",
+    "output": "./workspace",
+    "scripts": "./scripts"
+  }
+}
