@@ -1,0 +1,15 @@
+# Power Apps Canvas Agent Rules
+
+## Context Awareness
+- Always read `./aidocs/rules.md` before generating any YAML.
+- Use `./aidocs/control_catalog.md` to verify property names.
+
+## Mandatory Workflow
+1. **Generate:** Create the Power Apps YAML source.
+2. **Validate:** After writing a file, you MUST execute the terminal command: 
+   `python scripts/validator.py [path_to_file]`
+3. **Refine:** If the command output contains "❌", you must fix the code and re-run the validator. Do not signal "Task Complete" until you see "✅ Validation Passed".
+
+## Formatting
+- Never omit the `=` prefix for Power Fx formulas.
+- Always include the `Variant` property for Galleries.

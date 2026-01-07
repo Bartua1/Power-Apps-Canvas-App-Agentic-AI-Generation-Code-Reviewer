@@ -1,6 +1,6 @@
 {
   "project_name": "PowerAppsAgenticReviewer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "powerapps_schema_version": "1.326",
   "validation_settings": {
     "strict_formula_prefix": true,

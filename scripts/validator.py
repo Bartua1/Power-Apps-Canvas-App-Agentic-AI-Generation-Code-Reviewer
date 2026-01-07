@@ -2,6 +2,10 @@ import yaml
 import re
 import sys
 import os
+from yaml.loader import SafeLoader
+
+# FIX: Tell PyYAML to treat the '=' sign as a string instead of a special 'value' tag
+SafeLoader.add_constructor('tag:yaml.org,2002:value', lambda loader, node: "=")
 
 class PowerAppsValidator:
     def __init__(self, file_path):
@@ -9,7 +13,7 @@ class PowerAppsValidator:
         self.errors = []
         self.warnings = []
 
-        # Keywords that indicate a value should be a Power Fx formula (starting with =)
+        # Keywords that indicate a value should be a Power Fx formula
         self.formula_indicators = [
             r'Filter\(', r'Navigate\(', r'Lookup\(', r'Set\(', r'UpdateContext\(',
             r'Patch\(', r'Collect\(', r'Color\.', r'DisplayMode\.', r'ThisItem\.',
@@ -17,10 +21,10 @@ class PowerAppsValidator:
             r'\btrue\b', r'\bfalse\b'
         ]
 
-        # Hallucinated properties mapping
+        # Common hallucinations
         self.bad_properties = {
             'OnClick': 'OnSelect',
-            'Value': 'Default (usually)',
+            'Value': 'Default',
             'OnPress': 'OnSelect'
         }
 
@@ -30,40 +34,41 @@ class PowerAppsValidator:
 
         try:
             with open(self.file_path, 'r') as f:
-                data = yaml.safe_load(f)
+                # Use the patched SafeLoader
+                data = yaml.load(f, Loader=SafeLoader)
                 if not data:
                     return "Error: YAML file is empty."
                 self._check_node(data)
         except yaml.YAMLError as exc:
             self.errors.append(f"Invalid YAML Structure: {exc}")
         except Exception as e:
-            self.errors.append(f"Unexpected Error: {e}")
+            self.errors.append(f"Unexpected Script Error: {e}")
 
         return self._format_report()
 
     def _check_node(self, node, parent_name="Root"):
-        """Recursively check controls and properties."""
         if not isinstance(node, dict):
             return
 
         for key, value in node.items():
-            # 1. Check Control Naming (No spaces)
             if " " in key:
-                self.errors.append(f"Control Name Error: '{key}' contains spaces. Power Apps names must be alphanumeric.")
+                self.errors.append(f"Control Name Error: '{key}' contains spaces.")
 
             if isinstance(value, dict):
-                # 2. Gallery Specific Check: Variant Missing
                 control_type = value.get("Control") or value.get("Type")
+                
+                # Gallery Check: Ensure Variant exists
                 if control_type == "Gallery":
-                    properties = value.get("Properties", {})
+                    # Safer check for None or missing Properties
+                    properties = value.get("Properties") or {}
                     if "Variant" not in properties:
-                        self.errors.append(f"Gallery Error: '{key}' is missing the 'Variant' property. Suggestion: Add 'Variant: BrowseLayout_Flexible_SocialFeed_ver5.0'")
+                        self.errors.append(f"Gallery Error: '{key}' is missing 'Variant'. Suggestion: Add 'Variant: BrowseLayout_Flexible_SocialFeed_ver5.0'")
 
-                # 3. Check Properties block
+                # Check Properties block
                 if "Properties" in value:
                     self._check_properties(key, value["Properties"])
 
-                # Recursive call for children/nested controls
+                # Recursively check children
                 self._check_node(value, key)
 
     def _check_properties(self, control_name, props):
@@ -71,25 +76,32 @@ class PowerAppsValidator:
             return
 
         for p_name, p_val in props.items():
+            # If the property is empty (None), skip or treat as empty string
+            if p_val is None:
+                continue
+                
             val_str = str(p_val)
 
-            # 4. Check for Hallucinated Property Names
+            # Property Name Check
             if p_name in self.bad_properties:
-                self.errors.append(f"Property Name Error: '{control_name}' uses '{p_name}'. Did you mean '{self.bad_properties[p_name]}建?")
+                self.errors.append(f"Property Name Error: '{control_name}' uses '{p_name}'. Use '{self.bad_properties[p_name]}' instead.")
 
-            # 5. The Formula Prefix Rule (=)
-            # If it looks like a formula but doesn't start with =
+            # Formula Prefix Check
+            # If the value is just "=", it's an empty formula, which is valid.
+            if val_str == "=":
+                continue
+
             for indicator in self.formula_indicators:
                 if re.search(indicator, val_str, re.IGNORECASE):
                     if not val_str.startswith("="):
-                        self.errors.append(f"Formula Error: Property '{p_name}' in '{control_name}' contains logic but is missing the '=' prefix. Found: '{val_str}'")
+                        self.errors.append(f"Formula Error: Property '{p_name}' in '{control_name}' missing '=' prefix. Found: '{val_str}'")
                         break
 
     def _format_report(self):
-        if not self.errors and not self.warnings:
+        if not self.errors:
             return "✅ Validation Passed: The code is ready for Power Apps."
-
-        report = ["❌ Validation Failed! Please fix the following errors:"]
+        
+        report = ["❌ Validation Failed! Please fix these errors:"]
         for err in self.errors:
             report.append(f" - {err}")
         return "\n".join(report)
