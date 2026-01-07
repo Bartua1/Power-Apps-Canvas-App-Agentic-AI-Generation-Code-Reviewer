@@ -11,8 +11,7 @@ class PowerAppsValidator:
     def __init__(self, file_path):
         self.file_path = file_path
         self.errors = []
-        self.warnings = []
-
+        
         # Keywords that indicate a value should be a Power Fx formula
         self.formula_indicators = [
             r'Filter\(', r'Navigate\(', r'Lookup\(', r'Set\(', r'UpdateContext\(',
@@ -21,7 +20,6 @@ class PowerAppsValidator:
             r'\btrue\b', r'\bfalse\b'
         ]
 
-        # Common hallucinations
         self.bad_properties = {
             'OnClick': 'OnSelect',
             'Value': 'Default',
@@ -33,12 +31,14 @@ class PowerAppsValidator:
             return f"Error: File {self.file_path} not found."
 
         try:
-            with open(self.file_path, 'r') as f:
-                # Use the patched SafeLoader
+            with open(self.file_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=SafeLoader)
-                if not data:
-                    return "Error: YAML file is empty."
-                self._check_node(data)
+                if data is None:
+                    return "Error: YAML file is empty or invalid."
+                
+                # Start recursive check
+                self._recursive_check(data)
+                
         except yaml.YAMLError as exc:
             self.errors.append(f"Invalid YAML Structure: {exc}")
         except Exception as e:
@@ -46,62 +46,68 @@ class PowerAppsValidator:
 
         return self._format_report()
 
-    def _check_node(self, node, parent_name="Root"):
-        if not isinstance(node, dict):
+    def _recursive_check(self, node, current_path="Root"):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                new_path = f"{current_path} -> {key}"
+                
+                # 1. Check Key Names (Control Names)
+                if " " in str(key):
+                    self.errors.append(f"Control Name Error: '{key}' contains spaces at {current_path}")
+
+                # 2. Check for Hallucinated Property Names
+                if key in self.bad_properties:
+                    self.errors.append(f"Property Name Error: Found '{key}' at {current_path}. Use '{self.bad_properties[key]}' instead.")
+
+                # 3. Check Values
+                if isinstance(value, str):
+                    self._validate_value(key, value, current_path)
+                
+                # 4. Special Gallery Check
+                if key == "Control" and value == "Gallery":
+                    # Look back at the parent to see if Variant exists
+                    if isinstance(node, dict) and "Properties" in node:
+                        if "Variant" not in node["Properties"]:
+                            self.errors.append(f"Gallery Error: Control at {current_path} is missing 'Variant'.")
+
+                # Recurse
+                self._recursive_check(value, new_path)
+        
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                self._recursive_check(item, f"{current_path}[{i}]")
+
+    def _validate_value(self, prop_name, val, path):
+        val_str = val.strip()
+        
+        if not val_str or val_str == "=":
             return
 
-        for key, value in node.items():
-            if " " in key:
-                self.errors.append(f"Control Name Error: '{key}' contains spaces.")
-
-            if isinstance(value, dict):
-                control_type = value.get("Control") or value.get("Type")
-                
-                # Gallery Check: Ensure Variant exists
-                if control_type == "Gallery":
-                    # Safer check for None or missing Properties
-                    properties = value.get("Properties") or {}
-                    if "Variant" not in properties:
-                        self.errors.append(f"Gallery Error: '{key}' is missing 'Variant'. Suggestion: Add 'Variant: BrowseLayout_Flexible_SocialFeed_ver5.0'")
-
-                # Check Properties block
-                if "Properties" in value:
-                    self._check_properties(key, value["Properties"])
-
-                # Recursively check children
-                self._check_node(value, key)
-
-    def _check_properties(self, control_name, props):
-        if not isinstance(props, dict):
+        # ERROR FIX: Catch the ' "Text" ' hallucination
+        # In YAML, '"Text"' is parsed as the literal string: "Text"
+        # In Power Apps, this MUST be ="Text"
+        if val_str.startswith('"') and not val_str.startswith('="'):
+            # This catches the exact issue: Text: '"  INFORMACIÓN ... "'
+            self.errors.append(
+                f"Syntax Error at {path}: Property '{prop_name}' starts with double quotes but is missing the '=' prefix. "
+                f"Found: {val_str} | Expected: ={val_str}"
+            )
             return
 
-        for p_name, p_val in props.items():
-            # If the property is empty (None), skip or treat as empty string
-            if p_val is None:
-                continue
-                
-            val_str = str(p_val)
-
-            # Property Name Check
-            if p_name in self.bad_properties:
-                self.errors.append(f"Property Name Error: '{control_name}' uses '{p_name}'. Use '{self.bad_properties[p_name]}' instead.")
-
-            # Formula Prefix Check
-            # If the value is just "=", it's an empty formula, which is valid.
-            if val_str == "=":
-                continue
-
+        # Check for other Power Fx indicators missing the '='
+        if not val_str.startswith('='):
             for indicator in self.formula_indicators:
                 if re.search(indicator, val_str, re.IGNORECASE):
-                    if not val_str.startswith("="):
-                        self.errors.append(f"Formula Error: Property '{p_name}' in '{control_name}' missing '=' prefix. Found: '{val_str}'")
-                        break
+                    self.errors.append(
+                        f"Formula Error at {path}: Property '{prop_name}' contains a Power Fx function but missing '=' prefix. Found: '{val_str}'"
+                    )
+                    break
 
     def _format_report(self):
         if not self.errors:
             return "✅ Validation Passed: The code is ready for Power Apps."
         
-        report = ["❌ Validation Failed! Please fix these errors:"]
+        report = [f"❌ Validation Failed! Found {len(self.errors)} errors:"]
         for err in self.errors:
             report.append(f" - {err}")
         return "\n".join(report)
@@ -110,6 +116,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python validator.py <path_to_yaml>")
     else:
-        file_to_check = sys.argv[1]
-        validator = PowerAppsValidator(file_to_check)
-        print(validator.validate())
+        print(PowerAppsValidator(sys.argv[1]).validate())
