@@ -20,10 +20,17 @@ class PowerAppsValidator:
             r'\btrue\b', r'\bfalse\b'
         ]
 
+        # Properties that changed names or are commonly hallucinated from other languages
         self.bad_properties = {
             'OnClick': 'OnSelect',
             'Value': 'Default',
             'OnPress': 'OnSelect'
+        }
+
+        # Properties that DO NOT EXIST in the Power Apps Source Schema
+        # ZIndex is the most common AI hallucination.
+        self.forbidden_properties = {
+            'ZIndex': "Power Apps YAML uses the order of declaration for layering. Remove 'ZIndex' and move the control up/down in the file instead."
         }
 
     def validate(self):
@@ -55,17 +62,20 @@ class PowerAppsValidator:
                 if " " in str(key):
                     self.errors.append(f"Control Name Error: '{key}' contains spaces at {current_path}")
 
-                # 2. Check for Hallucinated Property Names
+                # 2. Check for Hallucinated/Deprecated Property Names
                 if key in self.bad_properties:
                     self.errors.append(f"Property Name Error: Found '{key}' at {current_path}. Use '{self.bad_properties[key]}' instead.")
 
-                # 3. Check Values
+                # 3. Check for Forbidden Properties (like ZIndex)
+                if key in self.forbidden_properties:
+                    self.errors.append(f"Schema Error: Found forbidden property '{key}' at {current_path}. {self.forbidden_properties[key]}")
+
+                # 4. Check Values
                 if isinstance(value, str):
                     self._validate_value(key, value, current_path)
                 
-                # 4. Special Gallery Check
+                # 5. Special Gallery Check
                 if key == "Control" and value == "Gallery":
-                    # Look back at the parent to see if Variant exists
                     if isinstance(node, dict) and "Properties" in node:
                         if "Variant" not in node["Properties"]:
                             self.errors.append(f"Gallery Error: Control at {current_path} is missing 'Variant'.")
@@ -83,18 +93,13 @@ class PowerAppsValidator:
         if not val_str or val_str == "=":
             return
 
-        # ERROR FIX: Catch the ' "Text" ' hallucination
-        # In YAML, '"Text"' is parsed as the literal string: "Text"
-        # In Power Apps, this MUST be ="Text"
         if val_str.startswith('"') and not val_str.startswith('="'):
-            # This catches the exact issue: Text: '"  INFORMACIÓN ... "'
             self.errors.append(
                 f"Syntax Error at {path}: Property '{prop_name}' starts with double quotes but is missing the '=' prefix. "
                 f"Found: {val_str} | Expected: ={val_str}"
             )
             return
 
-        # Check for other Power Fx indicators missing the '='
         if not val_str.startswith('='):
             for indicator in self.formula_indicators:
                 if re.search(indicator, val_str, re.IGNORECASE):
